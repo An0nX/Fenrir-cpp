@@ -1,5 +1,5 @@
 # Fenrir-cpp
-Simple Bash IOC Scanner
+Simple C++ IOC Scanner
 
 Fenrir is a simple IOC scanner bash script. It allows scanning Linux/Unix/OSX systems for the following Indicators of Compromise (IOCs):
 
