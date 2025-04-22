@@ -1,0 +1,93 @@
+# Имя рабочего процесса
+name: Build Fenrir C++ (Linux)
+
+# Триггеры запуска
+on:
+  push:
+    branches: [ "master" ] # При пуше в master
+  pull_request:
+    branches: [ "master" ] # При pull request в master
+
+jobs:
+  build:
+    # Запускаем только на Ubuntu, т.к. код специфичен для Linux
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Не прерывать все сборки, если одна упадет
+      fail-fast: false
+      matrix:
+        # Варьируем только компилятор под Linux
+        cpp_compiler: [g++, clang++]
+        include:
+          # Явно указываем пару C/C++ компиляторов
+          - cpp_compiler: g++
+            c_compiler: gcc
+          - cpp_compiler: clang++
+            c_compiler: clang
+
+    steps:
+    # 1. Получение кода из репозитория
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # 2. Установка зависимостей для сборки на Ubuntu
+    - name: Install Linux dependencies
+      run: |
+        sudo apt-get update -y
+        # Устанавливаем все необходимые инструменты и библиотеки для разработки
+        sudo apt-get install -y --no-install-recommends \
+          build-essential \
+          cmake \
+          pkg-config \
+          libssl-dev \
+          zlib1g-dev \
+          libbz2-dev \
+          libmagic-dev \
+          liblzma-dev \
+          libzstd-dev
+
+    # 3. (Необязательно) Проверка версий установленных инструментов
+    - name: Check tools and libraries versions
+      run: |
+        cmake --version
+        ${{ matrix.cpp_compiler }} --version
+        echo "Installed -dev packages:"
+        dpkg -l | grep -- '-dev' || true # Показать установленные dev пакеты
+
+    # 4. Определение пути для директории сборки
+    - name: Set build directory string
+      id: strings
+      shell: bash
+      run: |
+        echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
+
+    # 5. Конфигурация CMake
+    - name: Configure CMake
+      run: >
+        cmake -B ${{ steps.strings.outputs.build-output-dir }}
+        -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
+        -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
+        # Устанавливаем тип сборки Release
+        -DCMAKE_BUILD_TYPE=Release
+        -S ${{ github.workspace }}
+
+    # 6. Сборка проекта
+    - name: Build
+      # --config Release не нужен для Makefile (генератор по умолчанию в Linux)
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }}
+
+    # 7. (Необязательно) Проверка динамических зависимостей
+    - name: Check linking (ldd)
+      run: ldd ${{ steps.strings.outputs.build-output-dir }}/fenrir
+
+    # 8. Загрузка собранного артефакта
+    - name: Upload build artifact
+      uses: actions/upload-artifact@v4
+      with:
+        # Имя артефакта включает компилятор
+        name: fenrir-linux-${{ matrix.cpp_compiler }}
+        # Путь к исполняемому файлу
+        path: ${{ steps.strings.outputs.build-output-dir }}/fenrir
+        # Время хранения артефакта (опционально)
+        retention-days: 7
