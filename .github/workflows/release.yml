@@ -1,0 +1,137 @@
+# Имя рабочего процесса
+name: Create GitHub Release
+
+# Триггер: Запускать только при создании нового тега вида v*.*.*
+on:
+  push:
+    tags:
+      - 'v*.*.*' # Например: v1.0.0, v0.9.1-alpha
+
+jobs:
+  # --- ЗАДАНИЕ 1: Сборка бинарников под Linux ---
+  build-linux:
+    name: Build on Linux (${{ matrix.cpp_compiler }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cpp_compiler: [g++, clang++]
+        include:
+          - cpp_compiler: g++
+            c_compiler: gcc
+            artifact_suffix: gcc
+          - cpp_compiler: clang++
+            c_compiler: clang
+            artifact_suffix: clang
+    outputs:
+      # Передаем имя артефакта следующему заданию
+      artifact_name_gcc: fenrir-linux-gcc
+      artifact_name_clang: fenrir-linux-clang
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        # Важно: нужно получить теги, чтобы определить версию
+        with:
+          fetch-depth: 0 # Получить всю историю, включая теги
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake pkg-config libssl-dev zlib1g-dev \
+            libbz2-dev libmagic-dev liblzma-dev libzstd-dev
+
+      - name: Set build directory string
+        id: strings
+        shell: bash
+        run: |
+          echo "build-output-dir=${{ github.workspace }}/build-${{ matrix.artifact_suffix }}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure CMake
+        run: >
+          cmake -B ${{ steps.strings.outputs.build-output-dir }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
+          -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
+          -DCMAKE_BUILD_TYPE=Release
+          -S ${{ github.workspace }}
+
+      - name: Build
+        run: cmake --build ${{ steps.strings.outputs.build-output-dir }}
+
+      # --- Шаг для подготовки артефакта ---
+      # Опционально: Strip бинарника перед загрузкой
+      - name: Strip executable
+        run: strip ${{ steps.strings.outputs.build-output-dir }}/fenrir
+
+      # Переименовываем для уникальности и ясности в артефактах/релизе
+      - name: Rename executable for artifact
+        run: mv ${{ steps.strings.outputs.build-output-dir }}/fenrir ${{ steps.strings.outputs.build-output-dir }}/fenrir-linux-${{ matrix.artifact_suffix }}
+
+      # Загружаем артефакт *сборки* (не релиза), чтобы передать его заданию релиза
+      - name: Upload build artifact (for release job)
+        uses: actions/upload-artifact@v4
+        with:
+          name: fenrir-linux-${{ matrix.artifact_suffix }} # Уникальное имя для каждого компилятора
+          path: ${{ steps.strings.outputs.build-output-dir }}/fenrir-linux-${{ matrix.artifact_suffix }}
+
+  # --- ЗАДАНИЕ 2: Создание релиза и загрузка артефактов ---
+  create-release:
+    name: Create Release
+    # Запускается только после успешной сборки на Linux
+    needs: [build-linux]
+    runs-on: ubuntu-latest
+    # Указываем разрешения для записи релизов
+    permissions:
+      contents: write # Необходимо для создания релизов/загрузки ассетов
+
+    steps:
+      # 1. Скачиваем артефакты предыдущего задания (сборки)
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          # Скачиваем все артефакты в одну директорию
+          path: release-assets/
+          # Опционально: если нужно сохранить структуру по имени артефакта
+          # pattern: fenrir-linux-*
+          # merge-multiple: true
+
+      # 2. Проверяем скачанные файлы (опционально)
+      - name: List downloaded assets
+        run: ls -R release-assets/
+
+      # 3. Создаем релиз
+      - name: Create GitHub Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Токен предоставляется GitHub Actions
+        with:
+          tag_name: ${{ github.ref_name }} # Используем имя тега, который запустил workflow
+          release_name: Release ${{ github.ref_name }} # Имя релиза (например, Release v1.0.0)
+          body: | # Описание релиза (можно добавить автоматическое описание изменений)
+            Release of version ${{ github.ref_name }}.
+            Contains Linux builds compiled with GCC and Clang.
+          draft: false # Создавать как полноценный релиз (не черновик)
+          prerelease: false # Отметить как не pre-release (измените на true, если нужно)
+
+      # 4. Загружаем каждый артефакт в созданный релиз
+      - name: Upload Release Asset (GCC Build)
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }} # URL из шага создания релиза
+          asset_path: ./release-assets/fenrir-linux-gcc/fenrir-linux-gcc # Путь к файлу GCC
+          asset_name: fenrir-linux-gcc # Имя файла в релизе
+          asset_content_type: application/octet-stream # Тип контента
+
+      - name: Upload Release Asset (Clang Build)
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./release-assets/fenrir-linux-clang/fenrir-linux-clang # Путь к файлу Clang
+          asset_name: fenrir-linux-clang # Имя файла в релизе
+          asset_content_type: application/octet-stream
